@@ -85,7 +85,7 @@ static uint32 status_reg = 0;
 #define RED_LED_PIN LED_0
 #define PPI_CHANNEL 0
 uint32_t beacon_tx_ts=0,beacon_rx_ts=0;
-uint16_t cnt=0,last_cnt=0;
+uint16_t cnt=0,last_cnt=0,flag=1;
 #define TIMER_STAMP NRF_TIMER1
 #define TIMER_CC_CHANNEL NRF_TIMER_CC_CHANNEL2
 uint32_t time[4],offset,offset_sum=0, offset_mean=0;
@@ -120,8 +120,11 @@ void in_pin_handler(nrf_drv_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
        if(cnt>=2)
        {
          cnt=0;
+         flag=0;
+         NVIC_DisableIRQ(GPIOTE_IRQn);
          nrf_drv_gpiote_in_event_enable(DW1000_IRQ, false);
          offset=time[cnt-1]-time[cnt-2];
+         printf("%d %d %d \n",time[cnt-1],time[cnt-2],offset);
          nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_STOP);
          nrf_timer_cc_write(NRF_TIMER1, NRF_TIMER_CC_CHANNEL3, timestamp()+offset-300);
          nrf_timer_int_enable(NRF_TIMER1, NRF_TIMER_INT_COMPARE3_MASK);
@@ -287,8 +290,10 @@ int main(void)
     {
       // beacon_rx();
      // dwt_isr();
+     if(flag==1)
+     {
       dwt_rxenable(DWT_START_RX_DELAYED );
-      
+     }
     }
 }
 void TIMER1_IRQHandler(void)
