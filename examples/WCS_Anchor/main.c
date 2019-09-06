@@ -88,45 +88,29 @@ uint32_t beacon_tx_ts=0,beacon_rx_ts=0;
 uint16_t cnt=0,last_cnt=0,flag=1;
 #define TIMER_STAMP NRF_TIMER1
 #define TIMER_CC_CHANNEL NRF_TIMER_CC_CHANNEL2
-uint32_t time[4],offset,offset_sum=0, offset_mean=0;
+volatile uint32_t time[2],offset,offset_sum=0, offset_mean=0;
 uint32_t last_rx,cnt_interrupt=0;
 static void rx_ok_cb(const dwt_cb_data_t *cb_data);
-uint32 timestamp()
+volatile uint32 timestamp()
 {
     nrf_timer_task_trigger(TIMER_STAMP,NRF_TIMER_TASK_CAPTURE2);
-    return (nrf_timer_cc_read(TIMER_STAMP,TIMER_CC_CHANNEL));
+    return (nrf_timer_cc_read(TIMER_STAMP,NRF_TIMER_CC_CHANNEL2));
 }
 void in_pin_handler(nrf_drv_gpiote_pin_t pin, nrf_gpiote_polarity_t action)
 {
-//	  dwt_spicswakeup(dummy_buffer, DUMMY_BUFFER_LEN);
-//    dwt_writetxdata(sizeof(tx_mess), tx_mess, 0);
-//    dwt_writetxfctrl(sizeof(tx_mess), 0, 0);
-//		dwt_starttx(DWT_START_TX_IMMEDIATE);
-//	  tx_mess[BLINK_FRAME_SN_IDX]++;
-//	  if(tx_mess[BLINK_FRAME_SN_IDX]==10)
-//		{
-//			NRF_POWER->SYSTEMOFF=1;
-//		}
-	  //dwt_entersleep();
-       // dwt_setlowpowerlistening(1);
-        //dwt_lowpowerlistenisr();
-       // printf("ddd");
-        //dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RXFCG);
-       // nrf_gpio_pin_toggle(RED_LED_PIN);
-       dwt_isr();
-       //printf("%d\n",NRF_TIMER1->CC[0]);
+      // printf("%d\n",NRF_TIMER1->CC[0]);
        cnt++;
        time[cnt-1]=NRF_TIMER1->CC[0];
+       dwt_isr(); 
        if(cnt>=2)
        {
-         cnt=0;
+         
          flag=0;
          NVIC_DisableIRQ(GPIOTE_IRQn);
-         nrf_drv_gpiote_in_event_enable(DW1000_IRQ, false);
          offset=time[cnt-1]-time[cnt-2];
-         printf("%d %d %d \n",time[cnt-1],time[cnt-2],offset);
+         cnt=0;
          nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_STOP);
-         nrf_timer_cc_write(NRF_TIMER1, NRF_TIMER_CC_CHANNEL3, timestamp()+offset-300);
+         nrf_timer_cc_write(NRF_TIMER1, NRF_TIMER_CC_CHANNEL3, timestamp()+offset+200);
          nrf_timer_int_enable(NRF_TIMER1, NRF_TIMER_INT_COMPARE3_MASK);
          nrf_timer_shorts_enable(NRF_TIMER1, NRF_TIMER_SHORT_COMPARE3_CLEAR_MASK); // self running
     
@@ -151,7 +135,27 @@ void timer1_init()
   //  nrf_timer_shorts_enable(NRF_TIMER1, NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK); // self running
     
     //NVIC_SetPriority(TIMER1_IRQn, 7); // use "sd_nvic" prefix with softdevice
-  //  NVIC_EnableIRQ(TIMER1_IRQn); // use "sd_nvic" prefix with softdevice
+   // NVIC_EnableIRQ(TIMER1_IRQn); // use "sd_nvic" prefix with softdevice
+
+    nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_START);
+
+}
+void timer2_init()
+{
+    NVIC_DisableIRQ(TIMER2_IRQn); // use "sd_nvic" prefix with softdevice
+    
+    nrf_timer_task_trigger(NRF_TIMER2, NRF_TIMER_TASK_STOP);
+    nrf_timer_task_trigger(NRF_TIMER2, NRF_TIMER_TASK_CLEAR);
+    
+    nrf_timer_mode_set(NRF_TIMER2, NRF_TIMER_MODE_TIMER); 
+    nrf_timer_bit_width_set(NRF_TIMER2, NRF_TIMER_BIT_WIDTH_32);
+    nrf_timer_frequency_set(NRF_TIMER2, NRF_TIMER_FREQ_16MHz);
+    nrf_timer_cc_write(NRF_TIMER2, NRF_TIMER_CC_CHANNEL0, 1600000);
+    nrf_timer_int_enable(NRF_TIMER2, NRF_TIMER_INT_COMPARE0_MASK);
+    nrf_timer_shorts_enable(NRF_TIMER2, NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK); // self running
+    
+    NVIC_SetPriority(TIMER2_IRQn, 6); // use "sd_nvic" prefix with softdevice
+    NVIC_EnableIRQ(TIMER2_IRQn); // use "sd_nvic" prefix with softdevice
 
     nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_START);
 
@@ -202,7 +206,64 @@ void dw1000_init()
     dwt_setinterrupt(DWT_INT_RFCG, 1);
     dwt_setcallbacks(NULL, &rx_ok_cb, NULL, NULL);
     dwt_rxenable(DWT_START_RX_DELAYED );
-  //  dwt_setlowpowerlistening(1);
+}
+void ppi_timestamp()
+{
+   //config envent gpio interrupt -> active timer capute in channel 0
+   NRF_PPI->CH[PPI_CHANNEL].EEP=nrf_drv_gpiote_in_event_addr_get(DW1000_IRQ);
+   NRF_PPI->CH[PPI_CHANNEL].TEP=(uint32_t)&NRF_TIMER1->TASKS_CAPTURE[0];
+   NRF_PPI->CHENSET=(1UL<<PPI_CHANNEL);
+   //config event timer 1 interrupt-> active timer 2 in channel 1
+   NRF_PPI->CH[1].EEP=(uint32_t)&NRF_TIMER1->EVENTS_COMPARE[3];
+   NRF_PPI->CH[1].TEP=(uint32_t)&NRF_TIMER2->TASKS_START;
+   NRF_PPI->CHENSET=(1UL<<1);
+
+}
+int main(void)
+{
+    /*Initialization UART*/
+    boUART_Init ();
+    nrf_gpio_cfg_output(RED_LED_PIN);
+    timer1_init();
+    timer2_init();
+    gpio_init();
+    dw1000_init();
+    dwt_rxenable(DWT_START_RX_DELAYED );
+    ppi_timestamp();
+    while (1)
+    {
+     if(flag==1)
+     {
+      dwt_rxenable(DWT_START_RX_DELAYED );
+     }
+    }
+}
+void TIMER2_IRQHandler(void)
+{
+    if(NRF_TIMER2->EVENTS_COMPARE[0] == 1)
+    {
+       NRF_TIMER2->EVENTS_COMPARE[0] = 0;
+       nrf_gpio_pin_toggle(RED_LED_PIN);  
+    }
+}
+static void rx_ok_cb(const dwt_cb_data_t *cb_data)
+{
+   //printf("isr good frame\n");
+    if (cb_data->datalength <= RX_BUFFER_LEN)
+    {
+        /* A frame of correct length to be a wake-up message has been received, copy it to our local buffer. */
+        dwt_readrxdata(rx_buffer, cb_data->datalength, 0);
+        
+        /* Validate the frame is addressed to us from the expected sender and has the encoding of one of the wake-up sequence messages we expect.
+         * Then signal the arrival of the wake-up message to the background main loop by setting the rx_frame event flag. */
+//        if ((rx_buffer[DATA_FRAME_PAN_ID_IDX + 1] == 0xDE) && (rx_buffer[DATA_FRAME_PAN_ID_IDX] == 0xCA)
+//            && (rx_buffer[DATA_FRAME_SRC_ADDR_IDX + 1] == 'T') && (rx_buffer[DATA_FRAME_SRC_ADDR_IDX] == 'X')
+//            && (rx_buffer[DATA_FRAME_APP_FCODE_IDX] == 0xE0))
+//        {
+//            rx_frame = 1;
+//        }
+    }
+
 }
 static void resp_msg_get_ts(uint8 *ts_field, uint32 *ts)
 {
@@ -251,111 +312,4 @@ uint32_t beacon_rx()
     /* Reset RX to properly reinitialise LDE operation. */
     dwt_rxreset();
   }
-}
-void ppi_timestamp()
-{
-   NRF_PPI->CH[PPI_CHANNEL].EEP=nrf_drv_gpiote_in_event_addr_get(DW1000_IRQ);
-   NRF_PPI->CH[PPI_CHANNEL].TEP=(uint32_t)&NRF_TIMER1->TASKS_CAPTURE[0];
-   NRF_PPI->CHENSET=(1UL<<PPI_CHANNEL);
-}
-int main(void)
-{
-    /*Initialization UART*/
-    boUART_Init ();
-    nrf_gpio_cfg_output(RED_LED_PIN);
-    timer1_init();
-    gpio_init();
-    //nrf_gpio_cfg_input(DW1000_IRQ,NRF_GPIO_PIN_NOPULL);
-    dw1000_init();
-//    while(cnt<=2)
-//    {
-//       beacon_rx();
-//    }
-//    cnt=0;
-//    offset=time[1]-time[0];
-//    printf("%d\n",offset);
-//    nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_STOP);
-//    nrf_timer_cc_write(NRF_TIMER1, NRF_TIMER_CC_CHANNEL0, timestamp()+offset-200);
-//    nrf_timer_int_enable(NRF_TIMER1, NRF_TIMER_INT_COMPARE0_MASK);
-//    nrf_timer_shorts_enable(NRF_TIMER1, NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK); // self running
-//    
-//    NVIC_SetPriority(TIMER1_IRQn, 7); // use "sd_nvic" prefix with softdevice
-//    NVIC_EnableIRQ(TIMER1_IRQn); // use "sd_nvic" prefix with softdevice
-//    nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_START);
-//    last_rx=beacon_rx_ts;
-//    last_cnt=cnt;
-   dwt_rxenable(DWT_START_RX_DELAYED );
-   ppi_timestamp();
-    while (1)
-    {
-      // beacon_rx();
-     // dwt_isr();
-     if(flag==1)
-     {
-      dwt_rxenable(DWT_START_RX_DELAYED );
-     }
-    }
-}
-void TIMER1_IRQHandler(void)
-{
-    if(NRF_TIMER1->EVENTS_COMPARE[0] == 1)
-    {
-       cnt_interrupt++;
-       NRF_TIMER1->EVENTS_COMPARE[0] = 0;
-       nrf_gpio_pin_toggle(RED_LED_PIN);  
-//       if(cnt_interrupt==100)
-//       {
-//          nrf_delay_ms(90);
-//          beacon_rx();
-//          offset=beacon_rx_ts-last_rx;
-//          last_rx=beacon_rx_ts;
-//          nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_STOP);
-//          nrf_timer_cc_write(NRF_TIMER1, NRF_TIMER_CC_CHANNEL0, timestamp()+offset-200);
-//          nrf_timer_int_enable(NRF_TIMER1, NRF_TIMER_INT_COMPARE0_MASK);
-//          nrf_timer_shorts_enable(NRF_TIMER1, NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK); // self running
-//         // NVIC_SetPriority(TIMER1_IRQn, 7); // use "sd_nvic" prefix with softdevice
-//          NVIC_EnableIRQ(TIMER1_IRQn); // use "sd_nvic" prefix with softdevice
-//          nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_START);
-//          cnt_interrupt=0;
-//
-//       }
-       if(cnt_interrupt==1)
-       {
-           NVIC_DisableIRQ(TIMER1_IRQn); // use "sd_nvic" prefix with softdevice
-    
-           nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_STOP);
-           nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_CLEAR);
-           nrf_timer_cc_write(NRF_TIMER1, NRF_TIMER_CC_CHANNEL3, 1600000);
-           nrf_timer_int_enable(NRF_TIMER1, NRF_TIMER_INT_COMPARE3_MASK);
-           nrf_timer_shorts_enable(NRF_TIMER1, NRF_TIMER_SHORT_COMPARE3_CLEAR_MASK); // self running
-    
-           NVIC_SetPriority(TIMER1_IRQn, 7); // use "sd_nvic" prefix with softdevice
-           NVIC_EnableIRQ(TIMER1_IRQn); // use "sd_nvic" prefix with softdevice
-           nrf_timer_task_trigger(NRF_TIMER1, NRF_TIMER_TASK_START);
-
-       } 
-        //beacon_rx();
-
-    }
-}
-static void rx_ok_cb(const dwt_cb_data_t *cb_data)
-{
-    //dwt_isr();
-    printf("isr good frame");
-   // nrf_gpio_pin_toggle(RED_LED_PIN);
-    if (cb_data->datalength <= RX_BUFFER_LEN)
-    {
-        /* A frame of correct length to be a wake-up message has been received, copy it to our local buffer. */
-        dwt_readrxdata(rx_buffer, cb_data->datalength, 0);
-        
-        /* Validate the frame is addressed to us from the expected sender and has the encoding of one of the wake-up sequence messages we expect.
-         * Then signal the arrival of the wake-up message to the background main loop by setting the rx_frame event flag. */
-//        if ((rx_buffer[DATA_FRAME_PAN_ID_IDX + 1] == 0xDE) && (rx_buffer[DATA_FRAME_PAN_ID_IDX] == 0xCA)
-//            && (rx_buffer[DATA_FRAME_SRC_ADDR_IDX + 1] == 'T') && (rx_buffer[DATA_FRAME_SRC_ADDR_IDX] == 'X')
-//            && (rx_buffer[DATA_FRAME_APP_FCODE_IDX] == 0xE0))
-//        {
-//            rx_frame = 1;
-//        }
-    }
-
 }
